@@ -1,0 +1,356 @@
+---
+title: "PEC 1. Asignatura: Análisis de Datos Ómicos"
+author: "José Alberto Camacho López"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+`r Sys.Date()`
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r libraries, include=FALSE}
+# Install packages
+# Load packages
+# ...
+
+
+library(knitr)
+library(rmarkdown)
+
+```
+
+
+### 1. Selección de dataset
+
+En este primer apartado visitamos la página de Github del Borenstein Lab y encontramos datos curados de metabolómica (https://github.com/borenstein-lab/microbiome-metabolome-curated-data) y elegimos el dataset de FRANZOSA_IBD_2019 (https://github.com/borenstein-lab/microbiome-metabolome-curated-data/tree/main/data/processed_data/FRANZOSA_IBD_2019)
+
+### 2. Carga de archivos y creación de un objeto de clase SummarizedExperiment
+
+Cargamos las librerías necesarias
+
+```{r chunck2}
+# Cargamos la librería readr para leeer archivos .tsv o .csv
+library(readr) 
+
+# Cargamos la librería SummarizedExperiment
+library(SummarizedExperiment)
+
+```
+
+Cargamos la matriz de expresión génica (genera.counts.csv), con las muestras en las filas y las bacterias del microbioma en las columnas; el archivo de metadatos de las muestras (metadata.csv),  que será utilizados como metadata de las filas (samples); y el archivo que contiene información adicional sobre los metabolitos (mtb.csv)
+
+```{r chunck3}
+
+counts <- read.csv("genera.counts.tsv", sep = "\t", row.names = 1)
+metadata <- read.csv("metadata.tsv" , sep = "\t")
+metabolites <- read.csv("mtb.tsv", sep = "\t", row.names = 1)
+
+# En metadata, quizás no son útiles algunas columnas. Nos quedamos con las relevantes
+
+metadata_clean <- metadata[, c("Sample", "Study.Group", "Age", "Age.Units", 
+                               "Fecal.Calprotectin", "antibiotic", "immunosuppressant", 
+                               "mesalamine", "steroids")]
+
+
+# Verificar la estructura de la matriz
+dim(counts)
+
+```
+
+Creamos el objeto Summarized Experiment.Aunque previamente fusionamos los datos de counts y los de los metabolitos, eliminamos la primera columna Sample y verificamos que metadata_clean$Sample coincide con rownames(data_matrix):
+
+
+```{r chunck5}
+
+data_matrix <- cbind(counts[,-1], metabolites[,-1])
+
+```
+
+Verificamos que metadata_clean$Sample coincide con rownames(data_matrix):
+
+```{r chunck6}
+all(metadata_clean$Sample %in% rownames(data_matrix)) 
+
+```
+Ahora sí, creamos el objeto SummarizedExperiment:
+
+```{r chunck7}
+# Crea el SummarizedExperiment
+se <- SummarizedExperiment(
+  assays = list(counts = as.matrix(data_matrix)), 
+  rowData = metadata_clean
+)
+
+# Mostrar se
+se
+
+```
+
+Extraemos los metadatos de las muestras:
+
+```{r chunck8}
+metadata_se <- rowData(se)  
+metadata_se
+
+```
+
+
+Las principales diferencias entre SummarizedExperiment, perteneciente a la librería de su mismo nombre,y ExpressionSet, que pertenece a la librería Biobase (ambos de Bioconductor), son
+
+- El primero usa assays, esto es, múltiples matrices de expresión como counts, FPKM, TPM, etc., mientras ExpressionSet sólo permite una matriz de expresión (assayData), con las genes en las filas y las muestras en columnas.
+
+- Para los datos fenotípicos es más flexible SummarizedExperiment pues guarda los datos en colData, un dataframe, al contrario que ExpressionSet, que lo hace en phenoData (objeto de tipo AnnotatedDataFrame).
+
+- Para anotación de genes pasa igual, SummarizedExperiment usa rowData, de nuevo un dataframe, más sencillo de entender que el formato AnnotatedDataFrame de ExpressionSet.
+
+- Los metadatos son guardados en ExperimentData, de formato MIAME (Minimum Information About a Microarray Experiment), mientras el formato metadata de SE es más flexible.
+
+- Dado que ExpressionSet está orientado a análisis de microarrays es más antiguo y es compatible con algunos paquetes antiguos de Bioconductor; mientras SummarizedExperiment, más moderno, fue concebido para trabajar con RNA-Seq y, por lo tanto, se vincula con paquetes como DESeq2, edgeR o limma.
+
+### 3. Análisis Exploratorio
+
+A continuación, procedemos a realizar un análisis exploratorio de nuestros datos:
+
+```{r chunck9}
+# Vemos primeras filas de la matriz de counts y sus dimensiones 
+head(assay(se), 5)[, 1:5] # solo las primeras 5 filas y primeras 5 columnas
+
+dim(assay(se))
+
+# Ver dimensiones de los metadatos
+dim(rowData(se))
+
+
+```
+
+Realizamos un resumen inicial de los datos de conteo:
+
+```{r chunck10}
+# Convertimos los valores de conteo a un vector
+counts_vector <- as.vector(t(assay(se)))
+summary(counts_vector)
+
+```
+Esto muestra que los datos de conteo tienen una gran dispersión, pues tanto el mínimo como la mediana y primer cuartil es cero, además de un tercer cuartil realmente bajo. Sabemos entonces que más del 50% de los datos son cero. Es un distribución muy sesgada. Comprobamos la proporción de ceros:
+
+
+```{r chunck11}
+mean(as.vector(t(assay(se)) == 0))
+
+```
+En este caso, deberemos trabajar con una transformación logarítmica de la data, antes de realizar los boxplots de distribución. Lo hacemos en tres slicing de nuestras miles de muestras:
+
+```{r chunck12}
+# Aplicar la transformación logarítmica, log1p (log(1 + x)) a los datos de conteo
+data_log <- log1p(assay(se))
+
+# Luego, aplicar estandarización (z-score)
+data_std <- scale(data_log)
+
+# Crear el objeto SummarizedExperiment con los datos estandarizados
+se_std <- SummarizedExperiment(
+  assays = list(counts = data_std), 
+  rowData = rowData(se), 
+  colData = colData(se)
+)
+
+# Ver la estructura del objeto resultante
+se_std
+
+
+```
+```{r chunck13}
+counts_vector <- as.vector(assay(se_std))
+summary(counts_vector) 
+
+```
+
+La distribución se distribuye más homogéneamente. Ahora, la miramos en un histograma:
+
+
+```{r chunck14}
+# Crear histograma
+hist(
+  counts_vector, 
+  breaks = 50,  
+  col = "steelblue", 
+  border = "white",
+  main = "Histograma de los valores de counts",
+  xlab = "Valores de counts",
+  ylab = "Frecuencia",
+  xlim = c(0, quantile(counts_vector, 0.99))  
+)
+```
+
+Y realizamos boxplots por conjunto de muestras, ya que son demasiadas para verlas en un único gráfico:
+
+```{r chunck15}
+# Seleccionamos un subconjunto de muestras
+
+subset_samples1 <- 0:70
+
+# Creamos el boxplot
+boxplot(t(assay(se_std))[, subset_samples1], 
+        outline = FALSE,  # Oculta outliers para mejor visualización
+        col = "lightblue", 
+        main = "Distribución de valores de conteo por muestra",
+        xlab = "Muestras",
+        ylab = "log (1 + conteo)",
+        cex.axis = 0.5,
+        las = 2)  
+
+```
+Dispersión bastante alta.
+
+```{r chunck16}
+# Seleccionamos un subconjunto de muestras 
+
+subset_samples2 <- 71:140
+
+# Creamos el boxplot
+boxplot(t(assay(se_std))[, subset_samples2], 
+        outline = FALSE,  # Oculta outliers para mejor visualización
+        col = "lightblue", 
+        main = "Distribución de valores de conteo por muestra",
+        xlab = "Muestras",
+        ylab = "log (1 + conteo)",
+        cex.axis = 0.5,
+        las = 2)  
+
+```
+En este caso la dispersión es muy alta.
+
+
+```{r chunck17}
+# Seleccionamos un subconjunto de muestras 
+
+subset_samples3 <- 141:220
+
+# Creamos el boxplot
+boxplot(t(assay(se_std))[, subset_samples3], 
+        outline = FALSE,  # Oculta outliers para mejor visualización
+        col = "lightblue", 
+        main = "Distribución de valores de conteo por muestra",
+        xlab = "Muestras",
+        ylab = "log (1 + conteo)",
+        cex.axis = 0.5,
+        las = 2)  
+
+```
+
+Cierta dispersión aquí.
+
+Realizamos asimismo un cálculo de las componentes principales y la representación gráfica de la PC1 VS. PC2
+
+
+```{r chunck18}
+# Realizar PCA usando prcomp
+PCAS <- prcomp(assay(se_std))
+
+# Mostramos cúales son las PCA
+names(PCAS)
+
+# Mostramos las primeras filas de los primeros dos componentes principales
+head(PCAS$x[, 1:2]) 
+
+```
+Debemos calcular cuánto se dispersan estas dos componentes principales con la varianza explicada por cada una de estas componentes:
+
+```{r chunck19}
+
+# Calculamos la varianza explicada por cada componente
+explained_variance <- PCAS$sdev^2 / sum(PCAS$sdev^2)
+
+# Hacemos el porcentaje de varianza explicada 
+PC1_perc <- explained_variance[1] * 100
+PC2_perc <- explained_variance[2] * 100
+
+```
+
+Mostramos las dos primeras componentes principales en un gráfico de dispersión:
+
+```{r chunck20}
+library(ggplot2)
+
+# Crear un data.frame con las primeras dos componentes principales
+df_PCA <- data.frame(PC1 = PCAS$x[, 1],
+                     PC2 = PCAS$x[, 2],
+                     Sample = rownames(PCAS$x))
+
+# Crear el gráfico de dispersión con los porcentajes de varianza explicada
+ggplot(df_PCA, aes(x = PC1, y = PC2)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  labs(
+    title = "Primeros dos componentes principales",
+    x = paste("PC1", round(PC1_perc, 1), "%"),
+    y = paste("PC2", round(PC2_perc, 1), "%")
+  ) +
+  theme_minimal()
+
+
+```
+
+Por último, caracterizamos las muestras en un clustering jerárquico
+
+Para ello y en primer lugar, calculamos la distancia euclídea entre muestras:
+
+```{r chunck21}
+
+# Cálculo de la distancia euclidia entre muestras
+dist_matrix <- dist(assay(se_std), method = "euclidean") 
+
+# Realiza clustering jerárquico
+hc <- hclust(dist_matrix, method = "ward.D2")
+
+hc
+```
+
+Ploteamos el dendograma:
+
+```{r chunck22}
+
+# Dendrograma de clustering jerárquico
+plot(hc, labels = colnames(t(assay(se_std))), main = "Clustering Jerárquico de las Muestras", cex = 0.7)
+
+```
+Parece haber tres grupos marcados y por eso tal vez veíamos tres grupos de distribuciones diversas.
+
+Realizamos un heatmap de expresión:
+
+
+```{r Heatmap, echo=TRUE, message=FALSE, warning=FALSE}
+library(ComplexHeatmap)
+Heatmap(
+  t(assay(se_std))[1:30, 1:30], 
+  column_names_gp = gpar(fontsize = 8),  
+  row_names_gp = gpar(fontsize = 3)      
+) # Recortamos, para que sea legible
+```
+
+Vemos que los metabolitos primero y 27º son los más sobreexpresados de la lista.
+
+### 4. Creación de los archivos
+
+Creamos los archivos pedidos en el enunciado:
+
+```{r chunck24}
+# Guardamos el objeto SummarizedExperiment
+#save(se, file = "data/se_object.Rda") # Para los datos originales
+#save(se_std, file = "data/se_std_object.Rda") # Para los datos estandarizados
+
+# Guardamos la matriz y los metadatos en txt
+#write.table(assay(se), file = "data/counts_matrix.txt", sep = "\t", quote = FALSE)
+#write.table(rowData(se), file = "data/metadata.txt", sep = "\t", quote = FALSE)
+
+#write.table(assay(se_std), file = "data/counts_matrix_std.txt", sep = "\t", quote = FALSE)
+#write.table(rowData(se_std), file = "data/metadata_std.txt", sep = "\t", quote = FALSE)
+
+```
+
+
